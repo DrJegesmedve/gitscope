@@ -1,0 +1,236 @@
+<!-- apps/ui/index.html -->
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GitScope — Phase 1</title>
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <div class="brand-title">GitScope</div>
+          <div class="brand-subtitle">Phase 1 — Browser-only Git inspector</div>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <label class="toggle">
+          <span>Téma</span>
+          <input id="themeToggle" type="checkbox" />
+          <span class="toggle-ui" aria-hidden="true"></span>
+        </label>
+
+        <button id="unloadBtn" class="btn btn-ghost" type="button" title="Projekt kiürítése">
+          Unload
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section class="card">
+          <h2 class="card-title">Projekt</h2>
+
+          <div class="field">
+            <div class="label">Repo</div>
+            <div id="repoName" class="value">—</div>
+          </div>
+
+          <div class="field">
+            <div class="label">Állapot</div>
+            <div id="repoStatus" class="value">idle</div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="row gap">
+            <label class="btn btn-primary file-btn" title="Válassz .git mappát (webkitdirectory)">
+              <input
+                id="gitFilesInput"
+                class="visually-hidden"
+                type="file"
+                multiple
+                webkitdirectory
+                directory
+              />
+              Load (.git via files)
+            </label>
+
+            <button id="pickGitDirBtn" class="btn btn-secondary" type="button" title="Mappa választása (FS Access API)">
+              Pick directory
+            </button>
+          </div>
+
+          <p class="hint">
+            Tipp: Live trackinghez a <strong>Pick directory</strong> ajánlott (Chromium-alapú böngészők).
+          </p>
+
+          <div class="divider"></div>
+
+          <div class="row">
+            <label class="toggle">
+              <span>Live</span>
+              <input id="liveToggle" type="checkbox" />
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </label>
+
+            <label class="inline">
+              <span class="inline-label">Poll (ms)</span>
+              <input id="livePollMs" class="input" type="number" min="500" max="60000" step="500" value="3000" />
+            </label>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Navigáció</h2>
+          <nav class="nav">
+            <button class="nav-btn" type="button" data-view="dashboard">Dashboard</button>
+            <button class="nav-btn" type="button" data-view="timeline">Timeline</button>
+            <button class="nav-btn" type="button" data-view="files">Files</button>
+            <button class="nav-btn" type="button" data-view="refs">Refs</button>
+            <button class="nav-btn" type="button" data-view="config">Config</button>
+            <button class="nav-btn" type="button" data-view="commands">Commands</button>
+            <button class="nav-btn" type="button" data-view="groups">Groups</button>
+          </nav>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">Összegzés</h2>
+
+          <div class="stats-grid">
+            <div class="stat">
+              <div class="stat-label">Fájlok</div>
+              <div id="filesCount" class="stat-value">0</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Méret</div>
+              <div id="filesBytes" class="stat-value">0 B</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Események</div>
+              <div id="eventsCount" class="stat-value">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Ref-ek</div>
+              <div id="refsCount" class="stat-value">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Branches</div>
+              <div id="branchesCount" class="stat-value">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Tags</div>
+              <div id="tagsCount" class="stat-value">—</div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">Remotes</div>
+              <div id="remotesCount" class="stat-value">—</div>
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="content">
+        <div class="banner" role="status">
+          <div id="statusMessage" class="banner-text" data-kind="muted">
+            —
+          </div>
+        </div>
+
+        <!-- Panels -->
+        <section class="panel" data-view-panel="dashboard">
+          <h1 class="panel-title">Dashboard</h1>
+          <p class="panel-subtitle">
+            Phase 1: `.git` elemzés böngészőből (HEAD / refs / reflog / config).
+          </p>
+
+          <div class="card">
+            <h2 class="card-title">Következő lépés</h2>
+            <ul class="list">
+              <li>Timeline view: keresés + szűrők + lapozás</li>
+              <li>Files view: `.git` fájllista + raw preview</li>
+              <li>Charts: authors / eventTypes / activity heatmap</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="timeline" hidden>
+          <h1 class="panel-title">Timeline</h1>
+          <p class="panel-subtitle">Itt jön a reflog-alapú eseménylista (Phase 1).</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">
+              Következő modul: <code>features/timeline/timelineView.ts</code>
+            </p>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="files" hidden>
+          <h1 class="panel-title">Files</h1>
+          <p class="panel-subtitle">`.git` fájlok listája és tartalom-megtekintő (Phase 1).</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">
+              Következő modul: <code>features/files/filesView.ts</code> + <code>features/files/editor.ts</code> (Phase 2-ben write).
+            </p>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="refs" hidden>
+          <h1 class="panel-title">Refs</h1>
+          <p class="panel-subtitle">Ref-ek, branches, tags (Phase 1 parse).</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">Következő modul: <code>features/refs/refsView.ts</code></p>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="config" hidden>
+          <h1 class="panel-title">Config</h1>
+          <p class="panel-subtitle">Remote-ok és alap beállítások (Phase 1).</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">Következő modul: <code>features/config/configView.ts</code></p>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="commands" hidden>
+          <h1 class="panel-title">Commands</h1>
+          <p class="panel-subtitle">Phase 2-ben agenttel: dinamikus git parancs javaslatok.</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">Következő modul: <code>features/commands/commandEngine.ts</code></p>
+          </div>
+        </section>
+
+        <section class="panel" data-view-panel="groups" hidden>
+          <h1 class="panel-title">Groups</h1>
+          <p class="panel-subtitle">Phase 1-ben local only; Phase 3/4-ben szerveres.</p>
+
+          <div class="card">
+            <h2 class="card-title">Placeholder</h2>
+            <p class="muted">Következő modul: <code>features/groups/groupsView.ts</code></p>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="muted">
+        GitScope — Phase 1. Live tracking csak directory handle esetén érhető el.
+      </div>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
