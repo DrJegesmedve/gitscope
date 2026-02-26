@@ -172,7 +172,7 @@ export type Action =
   | { type: "live/setPollInterval"; pollIntervalMs: number }
   | { type: "live/tick"; at: number };
 
-export interface Store<TState, TAction> {
+export interface Store<TState = UIState, TAction = Action> {
   getState(): Readonly<TState>;
   dispatch(action: TAction): void;
 
