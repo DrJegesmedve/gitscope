@@ -1,14 +1,15 @@
 // apps/ui/src/features/timeline/timelineView.ts
 // =============================================================================
-// GitScope UI — Timeline View (Phase 1)
+// GitScope UI — Timeline View (Phase 1, refined)
 // - Renders reflog-derived events (RepoSnapshot.commits)
-// - Provides filters + pagination + lightweight rendering
+// - Filters: text/author/action/ref (+ date token support via YYYY-MM-DD)
+// - Pagination with safe clamping (auto-corrects out-of-range page)
 // - Self-mounting into panel: [data-view-panel="timeline"]
-// - No framework; safe DOM guards; XSS-safe output
+// - No framework; XSS-safe rendering; defensive DOM guards
 // =============================================================================
 
 import type { Store, UIState, Action, ReflogEntry } from "../../app/store";
-import { actions, selectors } from "../../app/store";
+import { actions } from "../../app/store";
 import { classifyReflogMessage } from "../../git/analyzer";
 
 export interface TimelineViewDeps {
@@ -32,27 +33,22 @@ export function createTimelineView(deps: TimelineViewDeps): TimelineViewControll
     const panel = document.querySelector<HTMLElement>('[data-view-panel="timeline"]');
     if (!panel) return;
 
-    // Build root container
     root = document.createElement("div");
     root.id = "timelineRoot";
     root.className = "timeline-root";
     panel.appendChild(root);
 
-    // Initial skeleton
     renderSkeleton(root);
+    wireUI(root, store);
 
-    // Wire UI events (delegation-safe)
-    wireUI(root);
-
-    // Subscribe to the minimal slice needed for rendering
     unsub = store.subscribe(
       (s) => ({
-        commits: selectors.commits(s),
-        q: selectors.query(s),
-        paging: selectors.timelinePaging(s),
-        status: selectors.status(s),
+        commits: s.repo?.commits ?? [],
+        query: s.query,
+        paging: s.timeline,
+        status: s.status,
       }),
-      () => render(root!, store.getState()),
+      () => render(root!, store),
       { fireImmediately: true }
     );
   }
@@ -85,19 +81,18 @@ function renderSkeleton(root: HTMLElement): void {
   const grid = document.createElement("div");
   grid.className = "timeline-grid";
 
-  // Search text
-  grid.appendChild(labeledInput("Szöveg", "timelineSearch", "Keress üzenetben / authorban / ref-ben…"));
-  // Author
+  grid.appendChild(labeledInput("Szöveg", "timelineSearch", "Keress üzenetben / authorban / ref-ben / dátumban… (YYYY-MM-DD)"));
   grid.appendChild(labeledInput("Author", "timelineAuthor", "Pl. John Doe vagy email"));
-  // Action
   grid.appendChild(labeledInput("Action", "timelineAction", "Pl. checkout / commit / merge…"));
-  // Ref
   grid.appendChild(labeledInput("Ref", "timelineRef", "Pl. HEAD vagy refs/heads/main"));
 
   controls.appendChild(grid);
 
   const paging = document.createElement("div");
   paging.className = "timeline-paging";
+
+  const prevBtn = button("Előző", "timelinePrev", "btn btn-ghost");
+  const nextBtn = button("Következő", "timelineNext", "btn btn-ghost");
 
   const perPage = document.createElement("select");
   perPage.id = "timelinePerPage";
@@ -108,9 +103,6 @@ function renderSkeleton(root: HTMLElement): void {
     opt.textContent = `${n} / oldal`;
     perPage.appendChild(opt);
   }
-
-  const prevBtn = button("Előző", "timelinePrev", "btn btn-ghost");
-  const nextBtn = button("Következő", "timelineNext", "btn btn-ghost");
 
   const pageInfo = document.createElement("div");
   pageInfo.id = "timelinePageInfo";
@@ -145,6 +137,7 @@ function renderSkeleton(root: HTMLElement): void {
       <th>Ref</th>
       <th>SHA</th>
       <th>Üzenet</th>
+      <th>Tools</th>
     </tr>
   `;
 
@@ -154,7 +147,6 @@ function renderSkeleton(root: HTMLElement): void {
   table.appendChild(thead);
   table.appendChild(tbody);
   tableWrap.appendChild(table);
-  tableCard.appendChild(tableWrap);
 
   const empty = document.createElement("div");
   empty.id = "timelineEmpty";
@@ -163,44 +155,59 @@ function renderSkeleton(root: HTMLElement): void {
   empty.textContent = "Nincs megjeleníthető esemény.";
   empty.hidden = true;
 
+  tableCard.appendChild(tableWrap);
   tableCard.appendChild(empty);
 
   root.appendChild(tableCard);
 
-  // Minimal inline styles hook (you already have styles.css; this is safe)
   ensureTimelineStyles();
 }
 
-function render(root: HTMLElement, state: Readonly<UIState>): void {
-  // Sync perPage select value
+function render(root: HTMLElement, store: Store<UIState, Action>): void {
+  const state = store.getState();
+
+  // Sync perPage select
   const perPageSel = root.querySelector<HTMLSelectElement>("#timelinePerPage");
   if (perPageSel) {
     const pp = state.timeline.perPage;
     if (perPageSel.value !== String(pp)) perPageSel.value = String(pp);
   }
 
-  const commits = state.repo?.commits ?? [];
-  const filtered = filterEvents(commits, state.query);
+  // Sync filter inputs
+  setInputValue(root, "#timelineSearch", state.query.timelineSearch);
+  setInputValue(root, "#timelineAuthor", state.query.timelineAuthor);
+  setInputValue(root, "#timelineAction", state.query.timelineAction);
+  setInputValue(root, "#timelineRef", state.query.timelineRef);
 
-  const perPage = state.timeline.perPage;
-  const page = clampInt(state.timeline.page, 0, Math.max(0, Math.ceil(filtered.length / perPage) - 1));
-  const start = page * perPage;
+  const events = state.repo?.commits ?? [];
+  const filtered = filterEvents(events, state.query);
+
+  const perPage = clampInt(state.timeline.perPage, 1, 10_000);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+
+  const desiredPage = clampInt(state.timeline.page, 0, totalPages - 1);
+  // If store page out of range, correct it once (safe; will re-render)
+  if (desiredPage !== state.timeline.page) {
+    store.dispatch(actions.setTimelinePage(desiredPage));
+    return;
+  }
+
+  const start = desiredPage * perPage;
   const end = Math.min(filtered.length, start + perPage);
   const slice = filtered.slice(start, end);
 
   // Update page info + buttons
   const pageInfo = root.querySelector<HTMLElement>("#timelinePageInfo");
   if (pageInfo) {
-    const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-    pageInfo.textContent = `Oldal: ${page + 1}/${totalPages} • Találat: ${filtered.length}`;
+    pageInfo.textContent = `Oldal: ${desiredPage + 1}/${totalPages} • Találat: ${filtered.length}`;
   }
 
   const prevBtn = root.querySelector<HTMLButtonElement>("#timelinePrev");
   const nextBtn = root.querySelector<HTMLButtonElement>("#timelineNext");
-  if (prevBtn) prevBtn.disabled = page <= 0;
-  if (nextBtn) nextBtn.disabled = end >= filtered.length;
+  if (prevBtn) prevBtn.disabled = desiredPage <= 0;
+  if (nextBtn) nextBtn.disabled = desiredPage >= totalPages - 1;
 
-  // Render table body (fast)
+  // Render table body
   const tbody = root.querySelector<HTMLTableSectionElement>("#timelineTbody");
   const empty = root.querySelector<HTMLElement>("#timelineEmpty");
   if (!tbody || !empty) return;
@@ -213,40 +220,49 @@ function render(root: HTMLElement, state: Readonly<UIState>): void {
   empty.hidden = true;
 
   const frag = document.createDocumentFragment();
-  for (const e of slice) {
-    frag.appendChild(renderRow(e));
-  }
+  for (const e of slice) frag.appendChild(renderRow(e));
   tbody.appendChild(frag);
-
-  // If state page was out of range, normalize it (without loops)
-  if (page !== state.timeline.page) {
-    // Avoid infinite dispatch loop: only dispatch when necessary
-    state.timeline.page !== page && state.timeline.page >= 0 && storeSafeDispatch(state, page);
-  }
-
-  function storeSafeDispatch(s: Readonly<UIState>, normalizedPage: number) {
-    // Using global store is not accessible here. We normalize by UI event flow instead.
-    // To keep this file pure-ish, we DON'T dispatch here.
-    // The page normalization happens via Prev/Next handlers which clamp.
-    void s; void normalizedPage;
-  }
 }
 
 function renderRow(e: ReflogEntry): HTMLTableRowElement {
   const tr = document.createElement("tr");
 
-  const action = classifyReflogMessage(e.msg);
+  const action = classifyReflogMessage(e.msg || "");
   const author = formatAuthor(e.authorName, e.authorEmail);
   const ref = e.ref || "—";
-  const sha = (e.newSha || "").slice(0, 10);
+  const shaFull = (e.newSha || "").trim();
+  const shaShort = shaFull ? shaFull.slice(0, 10) : "—";
 
   tr.appendChild(td(formatTime(e.ts)));
   tr.appendChild(td(action));
   tr.appendChild(td(author));
-  tr.appendChild(td(ref));
-  tr.appendChild(td(sha, "mono"));
+  tr.appendChild(td(ref, "mono"));
+  tr.appendChild(td(shaShort, "mono"));
   tr.appendChild(td(e.msg || "—"));
 
+  const tools = document.createElement("td");
+  tools.className = "timeline-tools";
+
+  const copySha = document.createElement("button");
+  copySha.type = "button";
+  copySha.className = "btn btn-ghost";
+  copySha.textContent = "Copy SHA";
+  copySha.dataset.action = "copy";
+  copySha.dataset.value = shaFull;
+  copySha.disabled = !shaFull;
+
+  const copyRef = document.createElement("button");
+  copyRef.type = "button";
+  copyRef.className = "btn btn-ghost";
+  copyRef.textContent = "Copy ref";
+  copyRef.dataset.action = "copy";
+  copyRef.dataset.value = e.ref || "";
+  copyRef.disabled = !e.ref;
+
+  tools.appendChild(copySha);
+  tools.appendChild(copyRef);
+
+  tr.appendChild(tools);
   return tr;
 }
 
@@ -254,88 +270,62 @@ function renderRow(e: ReflogEntry): HTMLTableRowElement {
  * Wiring
  * ========================================================================== */
 
-function wireUI(root: HTMLElement): void {
-  const store = getStoreFromGlobal();
-  // We avoid leaking store via globals normally, but main.ts can set it.
-  // If not set, controls won't dispatch (still safe).
-  // Recommended: set window.__gitscopeStore = store in main.ts later.
-  // For now we also support a local closure via dataset binding if needed.
-  void store;
+function wireUI(root: HTMLElement, store: Store<UIState, Action>): void {
+  // Inputs (debounced)
+  bindDebouncedInput(root, "#timelineSearch", (v) => store.dispatch(actions.patchQuery({ timelineSearch: v })));
+  bindDebouncedInput(root, "#timelineAuthor", (v) => store.dispatch(actions.patchQuery({ timelineAuthor: v })));
+  bindDebouncedInput(root, "#timelineAction", (v) => store.dispatch(actions.patchQuery({ timelineAction: v })));
+  bindDebouncedInput(root, "#timelineRef", (v) => store.dispatch(actions.patchQuery({ timelineRef: v })));
 
-  // Input handlers (debounced)
-  bindDebouncedInput(root, "#timelineSearch", (v) => safeDispatch(actions.patchQuery({ timelineSearch: v })));
-  bindDebouncedInput(root, "#timelineAuthor", (v) => safeDispatch(actions.patchQuery({ timelineAuthor: v })));
-  bindDebouncedInput(root, "#timelineAction", (v) => safeDispatch(actions.patchQuery({ timelineAction: v })));
-  bindDebouncedInput(root, "#timelineRef", (v) => safeDispatch(actions.patchQuery({ timelineRef: v })));
-
-  // Paging
+  // Paging buttons
   const prevBtn = root.querySelector<HTMLButtonElement>("#timelinePrev");
   const nextBtn = root.querySelector<HTMLButtonElement>("#timelineNext");
   const perPageSel = root.querySelector<HTMLSelectElement>("#timelinePerPage");
 
   if (prevBtn) {
     prevBtn.addEventListener("click", () => {
-      const s = safeGetState();
-      if (!s) return;
-      safeDispatch(actions.setTimelinePage(Math.max(0, s.timeline.page - 1)));
+      const s = store.getState();
+      store.dispatch(actions.setTimelinePage(Math.max(0, s.timeline.page - 1)));
     });
   }
 
   if (nextBtn) {
     nextBtn.addEventListener("click", () => {
-      const s = safeGetState();
-      if (!s) return;
-      safeDispatch(actions.setTimelinePage(s.timeline.page + 1));
+      const s = store.getState();
+      store.dispatch(actions.setTimelinePage(s.timeline.page + 1));
     });
   }
 
   if (perPageSel) {
     perPageSel.addEventListener("change", () => {
       const n = Number.parseInt(perPageSel.value, 10);
-      if (!Number.isFinite(n)) return;
-      safeDispatch(actions.setTimelinePerPage(n));
+      if (!Number.isFinite(n) || n <= 0) return;
+      store.dispatch(actions.setTimelinePerPage(n));
+      store.dispatch(actions.setTimelinePage(0)); // reset to first page for UX
     });
   }
 
-  // Initial fill inputs from state (best effort)
-  const s = safeGetState();
-  if (s) {
-    setInputValue(root, "#timelineSearch", s.query.timelineSearch);
-    setInputValue(root, "#timelineAuthor", s.query.timelineAuthor);
-    setInputValue(root, "#timelineAction", s.query.timelineAction);
-    setInputValue(root, "#timelineRef", s.query.timelineRef);
-  }
+  // Copy buttons in table (delegation)
+  root.addEventListener("click", async (ev) => {
+    const t = ev.target as HTMLElement | null;
+    if (!t) return;
 
-  function safeDispatch(a: Action): void {
-    const st = getStoreFromGlobal();
-    if (!st) return;
-    st.dispatch(a);
-  }
+    const btn = t.closest<HTMLButtonElement>("button");
+    if (!btn) return;
 
-  function safeGetState(): Readonly<UIState> | null {
-    const st = getStoreFromGlobal();
-    return st ? st.getState() : null;
-  }
-}
-
-/**
- * Optional global store hookup:
- * In main.ts you can set: (window as any).__gitscopeStore = store;
- * This keeps view modules decoupled from app bootstrap order.
- */
-function getStoreFromGlobal(): Store<UIState, Action> | null {
-  const anyWin = window as unknown as { __gitscopeStore?: Store<UIState, Action> };
-  return anyWin.__gitscopeStore ?? null;
+    if (btn.dataset.action === "copy") {
+      const val = btn.dataset.value ?? "";
+      if (!val) return;
+      await copyToClipboard(val, store);
+    }
+  });
 }
 
 /* =============================================================================
  * Filtering
  * ========================================================================== */
 
-function filterEvents(
-  events: ReflogEntry[],
-  q: UIState["query"]
-): ReflogEntry[] {
+function filterEvents(events: ReflogEntry[], q: UIState["query"]): ReflogEntry[] {
   const search = norm(q.timelineSearch);
   const author = norm(q.timelineAuthor);
   const action = norm(q.timelineAction);
@@ -345,16 +335,19 @@ function filterEvents(
 
   return events.filter((e) => {
     const msg = norm(e.msg);
-    const a = norm(`${e.authorName} ${e.authorEmail}`);
+    const a = norm(`${e.authorName ?? ""} ${e.authorEmail ?? ""}`);
     const r = norm(e.ref);
-    const act = norm(classifyReflogMessage(e.msg));
+    const act = norm(classifyReflogMessage(e.msg || ""));
+    const sha = norm(`${e.newSha ?? ""} ${e.oldSha ?? ""}`);
 
     if (author && !a.includes(author)) return false;
     if (action && !act.includes(action)) return false;
     if (ref && !r.includes(ref)) return false;
 
     if (search) {
-      const blob = `${msg} ${a} ${r} ${act} ${e.newSha} ${e.oldSha}`.toLowerCase();
+      // Support YYYY-MM-DD tokens (Dashboard uses this)
+      const day = e.ts ? formatDay(e.ts) : "";
+      const blob = `${msg} ${a} ${r} ${act} ${sha} ${day}`.toLowerCase();
       if (!blob.includes(search)) return false;
     }
 
@@ -367,7 +360,49 @@ function norm(s: string): string {
 }
 
 /* =============================================================================
- * Tiny DOM helpers
+ * Formatting
+ * ========================================================================== */
+
+function formatTime(ts: number): string {
+  if (!Number.isFinite(ts) || ts <= 0) return "—";
+  const d = new Date(ts);
+  const yyyy = d.getFullYear();
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  const hh = pad2(d.getHours());
+  const mi = pad2(d.getMinutes());
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function formatDay(ts: number): string {
+  if (!Number.isFinite(ts) || ts <= 0) return "";
+  const d = new Date(ts);
+  const yyyy = d.getFullYear();
+  const mm = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+function formatAuthor(name: string, email: string): string {
+  const n = (name || "").trim();
+  const e = (email || "").trim();
+  if (n && e) return `${n} <${e}>`;
+  if (n) return n;
+  if (e) return `<${e}>`;
+  return "—";
+}
+
+function clampInt(n: number, min: number, max: number): number {
+  const x = Number.isFinite(n) ? Math.trunc(n) : min;
+  return Math.min(max, Math.max(min, x));
+}
+
+/* =============================================================================
+ * DOM helpers
  * ========================================================================== */
 
 function h2(text: string): HTMLElement {
@@ -438,37 +473,44 @@ function td(text: string, cls?: string): HTMLTableCellElement {
 }
 
 /* =============================================================================
- * Formatting
+ * Clipboard (safe)
  * ========================================================================== */
 
-function formatTime(ts: number): string {
-  if (!Number.isFinite(ts) || ts <= 0) return "—";
-  const d = new Date(ts);
-  // YYYY-MM-DD HH:mm
-  const yyyy = d.getFullYear();
-  const mm = pad2(d.getMonth() + 1);
-  const dd = pad2(d.getDate());
-  const hh = pad2(d.getHours());
-  const mi = pad2(d.getMinutes());
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
-}
+async function copyToClipboard(value: string, store: Store<UIState, Action>): Promise<void> {
+  const text = value ?? "";
+  if (!text) return;
 
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      store.dispatch(actions.setMessage({ kind: "ok", text: "Másolva a vágólapra." }));
+      return;
+    }
+  } catch {
+    // fallback below
+  }
 
-function formatAuthor(name: string, email: string): string {
-  const n = (name || "").trim();
-  const e = (email || "").trim();
-  if (n && e) return `${n} <${e}>`;
-  if (n) return n;
-  if (e) return `<${e}>`;
-  return "—";
-}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "true");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
 
-function clampInt(n: number, min: number, max: number): number {
-  const x = Number.isFinite(n) ? Math.trunc(n) : min;
-  return Math.min(max, Math.max(min, x));
+    store.dispatch(
+      actions.setMessage({
+        kind: ok ? "ok" : "warn",
+        text: ok ? "Másolva a vágólapra." : "Nem sikerült másolni.",
+      })
+    );
+  } catch {
+    store.dispatch(actions.setMessage({ kind: "warn", text: "Nem sikerült másolni." }));
+  }
 }
 
 /* =============================================================================
@@ -490,6 +532,7 @@ function ensureTimelineStyles(): void {
       gap: 10px;
     }
     .timeline-field { display: grid; gap: 6px; }
+
     .timeline-paging {
       display: flex;
       align-items: center;
@@ -498,6 +541,7 @@ function ensureTimelineStyles(): void {
       margin: 12px 0;
       flex-wrap: wrap;
     }
+
     .table-wrap { overflow: auto; }
     .table {
       width: 100%;
@@ -510,7 +554,7 @@ function ensureTimelineStyles(): void {
       vertical-align: top;
       white-space: nowrap;
     }
-    .table td:last-child { white-space: normal; }
+    .table td:nth-child(6) { white-space: normal; }
     .table th {
       text-align: left;
       color: var(--muted);
@@ -519,10 +563,14 @@ function ensureTimelineStyles(): void {
       letter-spacing: 0.02em;
       text-transform: uppercase;
     }
+
+    .timeline-tools { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
     .mono { font-family: var(--mono); }
+
     @media (max-width: 980px) {
       .timeline-grid { grid-template-columns: 1fr; }
-      .table th:nth-child(5), .table td:nth-child(5) { display: none; }
+      /* hide Tools on very small screens if needed */
+      .table th:last-child, .table td:last-child { display: none; }
     }
   `;
   document.head.appendChild(style);
